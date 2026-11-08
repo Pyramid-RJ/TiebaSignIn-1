@@ -3,7 +3,12 @@ name: Daily Tieba Sign-In
 on:
   workflow_dispatch:
   schedule:
-    - cron: '30 22 * * *'  # UTC 22:30 = 北京时间次日 06:30
+    # 避开整点/半点的调度高峰（高峰期会延迟数小时甚至丢任务）
+    - cron: '17 22 * * *'  # UTC 22:17 = 北京时间次日 06:17
+
+permissions:
+  contents: write
+  actions: write
 
 jobs:
   signin:
@@ -27,11 +32,26 @@ jobs:
           WECHAT_WEBHOOK_KEY: ${{ secrets.WECHAT_WEBHOOK_KEY }}
         run: python run.py
 
+  # 真正能让 GitHub 保留定时任务的做法：让仓库本身有提交活动。
+  # 仓库超过 60 天没有任何提交，GitHub 会静默停掉 schedule 触发器。
   workflow-keepalive:
-    if: github.event_name == 'schedule'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    permissions:
-      actions: write
     steps:
-      - uses: liskin/gh-workflow-keepalive@v1
+      - uses: actions/checkout@v6
 
+      - name: Commit activity if repo has been idle for 25+ days
+        run: |
+          last=$(git log -1 --format=%ct)
+          idle=$(( ($(date +%s) - last) / 86400 ))
+          echo "days since last commit: $idle"
+          if [ "$idle" -ge 25 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            date -u +%FT%TZ > .keepalive
+            git add .keepalive
+            git commit -m "chore: keepalive $(date -u +%F)"
+            git push
+          fi
+
+      - uses: liskin/gh-workflow-keepalive@v1
